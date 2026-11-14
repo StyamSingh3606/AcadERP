@@ -1,9 +1,7 @@
-
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -pedantic -Werror -Iinclude
 
 TARGET = acaderp
-
 SOURCES = $(wildcard src/*.cpp)
 
 all: $(TARGET)
