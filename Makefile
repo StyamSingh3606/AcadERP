@@ -1,8 +1,10 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -pedantic -Werror -Iinclude
 
-TARGET = acaderp
 SOURCES = $(wildcard src/*.cpp)
+TARGET = acaderp
+
+.PHONY: all clean
 
 all: $(TARGET)
 
@@ -11,5 +13,3 @@ $(TARGET): $(SOURCES)
 
 clean:
 	rm -f $(TARGET)
-
-.PHONY: all clean
