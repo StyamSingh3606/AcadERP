@@ -1,0 +1,5 @@
+acaderp
+*.o
+*.exe
+build/
+cmake-build-*/
