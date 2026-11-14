@@ -41,7 +41,7 @@ public:
     const std::optional<Grade>& finalGrade() const noexcept;
     const std::vector<Grade>& progressGrades() const noexcept;
 
-    void addProgressGrade(const Grade& grade);
+    void addProgressGrade(const Grade& grade, const std::string& term);
     void convertToFinalGrade(const Grade& grade);
 };
 

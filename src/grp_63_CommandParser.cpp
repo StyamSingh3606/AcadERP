@@ -184,12 +184,22 @@ void CommandParser::execute(
                         const std::size_t colon = item.find(':');
 
                         if (colon != std::string::npos) {
-                            if (colon + 1 == item.size()) {
+                            if (colon == 0 || colon + 1 == item.size()) {
                                 throw ParseException(
                                     "Invalid prerequisite grade");
                             }
 
-                            item = item.substr(0, colon);
+                            const std::string minimumGrade =
+                                item.substr(colon + 1);
+
+                            const Grade grade = Grade::create(minimumGrade);
+
+                            if (!grade.isFinal() ||
+                                !grade.isPass() ||
+                                minimumGrade == "I") {
+                                throw ParseException(
+                                    "Invalid prerequisite grade");
+                            }
                         }
 
                         prerequisites.push_back(item);

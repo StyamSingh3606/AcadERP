@@ -36,7 +36,10 @@ const std::optional<Grade>& ThesisRecord::finalGrade() const noexcept {
     return finalGrade_;
 }
 
-void ThesisRecord::addProgressGrade(const Grade& grade) {
+void ThesisRecord::addProgressGrade(
+    const Grade& grade,
+    const std::string& term
+) {
     if (state_ == ThesisState::TERMINATED) {
         throw ThesisTerminatedException(
             "Cannot update a terminated thesis"
@@ -55,6 +58,14 @@ void ThesisRecord::addProgressGrade(const Grade& grade) {
         );
     }
 
+    // Progress term must be after registration and previous progress.
+    if (term <= term_ ||
+        (!progressTerms_.empty() && term <= progressTerms_.back())) {
+        throw InvalidThesisTransitionException(
+            "Thesis progress terms must be strictly increasing"
+        );
+    }
+
     ThesisState nextState = ThesisState::IN_PROGRESS;
 
     if (grade.symbol() == "X") {
@@ -66,8 +77,15 @@ void ThesisRecord::addProgressGrade(const Grade& grade) {
         }
     }
 
-    // Update state only after successfully storing the grade.
-    progressGrades_.push_back(grade);
+    // Prepare both updates before modifying the record.
+    std::vector<Grade> nextGrades = progressGrades_;
+    std::vector<std::string> nextTerms = progressTerms_;
+
+    nextGrades.push_back(grade);
+    nextTerms.push_back(term);
+
+    progressGrades_.swap(nextGrades);
+    progressTerms_.swap(nextTerms);
     state_ = nextState;
 }
 

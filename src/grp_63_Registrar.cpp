@@ -41,9 +41,13 @@ void Registrar::addCourse(std::unique_ptr<Course> course) {
     }
 
     for (const std::string& prerequisite : course->prerequisites()) {
-        if (courses_.find(prerequisite) == courses_.end()) {
+        const std::size_t colon = prerequisite.find(':');
+
+        const std::string prerequisiteCode = prerequisite.substr(0, colon);
+
+        if (courses_.find(prerequisiteCode) == courses_.end()) {
             throw InvalidCourseException(
-                "Unknown prerequisite: " + prerequisite
+                "Unknown prerequisite: " + prerequisiteCode
             );
         }
     }
@@ -199,12 +203,50 @@ std::string Registrar::eligibilityFailure(
         }
     }
 
-    // E4: Check prerequisites.
+    // E3 also checks open thesis registrations for the same course.
+    const std::string thesisPrefix = studentId + "|" + courseCode + "|";
+
+    for (const auto& entry : thesisRecords_) {
+        if (entry.first.compare(0, thesisPrefix.size(), thesisPrefix) != 0) {
+            continue;
+        }
+
+        const ThesisState state = entry.second.state();
+
+        if (state == ThesisState::REGISTERED ||
+            state == ThesisState::IN_PROGRESS ||
+            state == ThesisState::AT_RISK) {
+            return "E3";
+        }
+    }
+
+    // E4: Check prerequisites and their minimum required grades.
+
+    // E4: Check prerequisites and their minimum required grades.
     for (const std::string& prerequisite : course.prerequisites()) {
+        const std::size_t colon = prerequisite.find(':');
+
+        const std::string prerequisiteCode =
+            prerequisite.substr(0, colon);
+
+        const Course& prerequisiteCourse =
+            getCourse(prerequisiteCode);
+
+        const bool isSuPrerequisite =
+            dynamic_cast<const SuCourse*>(&prerequisiteCourse) != nullptr;
+
+        const std::string minimumGradeSymbol =
+            (colon == std::string::npos)
+                ? (isSuPrerequisite ? "S" : "D")
+                : prerequisite.substr(colon + 1);
+
+        const Grade minimumGrade =
+            Grade::create(minimumGradeSymbol);
+
         const Attempt* prerequisiteAttempt = nullptr;
 
         for (const Attempt& attempt : student.attempts()) {
-            if (attempt.courseCode() == prerequisite &&
+            if (attempt.courseCode() == prerequisiteCode &&
                 attempt.grade().isFinal()) {
                 if (prerequisiteAttempt == nullptr ||
                     attempt.attemptNumber() >
@@ -216,6 +258,17 @@ std::string Registrar::eligibilityFailure(
 
         if (prerequisiteAttempt == nullptr ||
             !prerequisiteAttempt->grade().isPass()) {
+            return "E4";
+        }
+
+        if (isSuPrerequisite) {
+            if (prerequisiteAttempt->grade().symbol() != "S") {
+                return "E4";
+            }
+        } else if (
+            prerequisiteAttempt->grade().pointsHundredths() <
+            minimumGrade.pointsHundredths()
+        ) {
             return "E4";
         }
     }
@@ -237,6 +290,19 @@ std::string Registrar::eligibilityFailure(
     for (const Attempt& attempt : student.attempts()) {
         if (attempt.term() == term) {
             termCredits += getCourse(attempt.courseCode()).credits();
+        }
+    }
+
+    // Thesis credits count only in the thesis registration term.
+    const std::string studentPrefix = studentId + "|";
+
+    for (const auto& entry : thesisRecords_) {
+        if (entry.first.compare(0, studentPrefix.size(), studentPrefix) != 0) {
+            continue;
+        }
+
+        if (entry.second.term() == term) {
+            termCredits += getCourse(entry.second.courseCode()).credits();
         }
     }
 
@@ -330,27 +396,35 @@ void Registrar::submitGrade(
 if (dynamic_cast<const ThesisCourse*>(&course) != nullptr) {
     const std::string prefix = studentId + "|" + courseCode + "|";
 
-    for (auto& entry : thesisRecords_) {
-        if (entry.first.compare(0, prefix.size(), prefix) != 0) {
+    auto latestRecord = thesisRecords_.end();
+
+    for (auto current = thesisRecords_.begin();
+         current != thesisRecords_.end(); ++current) {
+        if (current->first.compare(0, prefix.size(), prefix) != 0) {
             continue;
         }
 
-        ThesisRecord& record = entry.second;
+        const ThesisRecord& record = current->second;
 
+        // Progress must be submitted after the registration term.
         if (term <= record.term()) {
             continue;
         }
 
-        if (record.state() == ThesisState::TERMINATED ||
-            record.state() == ThesisState::FINAL) {
-            continue;
+        // Select the latest eligible thesis registration.
+        if (latestRecord == thesisRecords_.end() ||
+            record.term() > latestRecord->second.term()) {
+            latestRecord = current;
         }
-
-        record.addProgressGrade(grade);
-        return;
     }
 
-    throw NotRegisteredException(courseCode);
+    if (latestRecord == thesisRecords_.end()) {
+        throw NotRegisteredException(courseCode);
+    }
+
+    // Let ThesisRecord raise the appropriate state-transition exception.
+    latestRecord->second.addProgressGrade(grade, term);
+    return;
 }
 
     // Regular and SU course grades.
@@ -379,25 +453,29 @@ void Registrar::convertThesis(
 
     const std::string prefix = studentId + "|" + courseCode + "|";
 
-    auto it = thesisRecords_.end();
+    auto latestRecord = thesisRecords_.end();
 
     for (auto current = thesisRecords_.begin();
          current != thesisRecords_.end(); ++current) {
-        if (current->first.compare(0, prefix.size(), prefix) == 0) {
-            if (current->second.state() == ThesisState::IN_PROGRESS) {
-                it = current;
-            }
+        if (current->first.compare(0, prefix.size(), prefix) != 0) {
+            continue;
+        }
+
+        if (latestRecord == thesisRecords_.end() ||
+            current->second.term() > latestRecord->second.term()) {
+            latestRecord = current;
         }
     }
 
-    if (it == thesisRecords_.end()) {
+    if (latestRecord == thesisRecords_.end()) {
         throw NotRegisteredException(courseCode);
     }
 
     Grade grade = Grade::create(symbol);
 
     // Do not call course.validateGrade here: conversion accepts letter grades.
-    it->second.convertToFinalGrade(grade);
+    // ThesisRecord validates whether its current state permits conversion.
+    latestRecord->second.convertToFinalGrade(grade);
 }
 
 int Registrar::calculateGpaHundredths(
@@ -517,17 +595,19 @@ std::vector<std::string> Registrar::graduationFailures(
     for (const Attempt& attempt : student.attempts()) {
         const std::string& code = attempt.courseCode();
 
-        if (attempt.grade().symbol() == "I") {
-            hasPendingGrade = true;
+        auto it = latestAttempts.find(code);
+
+        if (it == latestAttempts.end() ||
+            attempt.attemptNumber() > it->second->attemptNumber()) {
+            latestAttempts[code] = &attempt;
         }
+    }
 
-        if (attempt.grade().isFinal()) {
-            auto it = latestAttempts.find(code);
-
-            if (it == latestAttempts.end() ||
-                attempt.attemptNumber() > it->second->attemptNumber()) {
-                latestAttempts[code] = &attempt;
-            }
+    // R7: Only the latest attempt's incomplete grade is pending.
+    for (const auto& entry : latestAttempts) {
+        if (entry.second->grade().symbol() == "I") {
+            hasPendingGrade = true;
+            break;
         }
     }
 
